@@ -1,0 +1,19 @@
+# Entornos virtuales de Python (Ansible)
+venv/
+.venv/
+venv-ansible/
+
+# Ficheros temporales de Ansible
+*.retry
+
+# Secretos locales
+.env
+
+# Material que NO se publica: memoria del TFG y banco de preguntas (incluye soluciones)
+*.pdf
+moodle_project/quizes/
+
+# Sistema / editores
+.DS_Store
+.vscode/
+.idea/

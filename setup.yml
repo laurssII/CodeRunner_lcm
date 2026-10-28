@@ -1,0 +1,42 @@
+www_protocol: "http"
+www_host: "localhost"
+www_port: 8080
+
+moodle_container_name: "moodle_project-moodle-1"
+
+moodle_path: "moodle"
+moodle_fullname: "Moodle Site"
+moodle_shortname: "Moodle"
+moodle_admin_user: "admin"
+moodle_admin_pass: "Admin123!"
+moodle_admin_email: "admin@example.com"
+moodle_lang: "es"
+moodle_dataroot: "/var/www/moodledata"
+
+db_type: "mysqli"
+db_name: "moodle"
+db_user: "moodleuser"
+db_pass: "moodlepass"
+db_host: "db"
+
+student_user: "alumno"
+student_pass: "alumno"
+teacher_user: "profesor"
+teacher_pass: "profesor"
+
+category_description: Category for CodeRunner questions
+category_name: CodeRunnerCategory
+
+course_fullname: Muestra CodeRunner - TFG_lcm
+course_shortname: TFG_lcm
+course_description: Curso de muestra del funcionamiento de CodeRunner
+
+section_1_name: Estructuras Enlazadas
+section_2_name: TADs Pilas+Colas+Conjuntos+Listas
+
+quiz_1_name: Cuestionario Estructuras Enlazadas
+quiz_1_introduction: Cuestionario sobre Estructuras Enlazadas.
+
+quiz_2_name: Cuestionario TADs
+quiz_2_introduction: Cuestionario sobre TADs Pilas+Colas+Listas+Conjuntos.
+

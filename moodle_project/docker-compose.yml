@@ -1,0 +1,41 @@
+name: moodle_project
+
+services:
+  moodle:
+    build: ./moodle
+    ports:
+      - "8080:80"   
+    depends_on:
+      - db
+      - jobe
+    networks:
+      - moodle_net
+    volumes:
+      - moodledata:/var/www/moodledata
+
+  db:
+    image: mysql:8.0
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: moodle
+      MYSQL_USER: moodleuser
+      MYSQL_PASSWORD: moodlepass
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - moodle_net
+
+  jobe:
+    image: trampgeek/jobeinabox
+    restart: unless-stopped
+    networks:
+      - moodle_net
+
+volumes:
+  db_data:
+  moodledata:
+
+networks:
+  moodle_net:
+    driver: bridge

@@ -1,0 +1,394 @@
+# Despliegue de Moodle + CodeRunner + Jobe (ver README.md).
+#
+# Uso (desde la raíz del repositorio, con Ansible instalado en la máquina anfitriona):
+#   ansible-galaxy install -r requirements.yml
+#   ansible-playbook -i hosts playbook.yml
+#
+---
+- hosts: moodle_servers
+  vars:
+    project_dir: "{{ ansible_env.HOME }}/moodle_project/"
+    path_to_copy_to: "{{ ansible_env.HOME }}/moodle_project/"
+
+    local_project_src: "{{ playbook_dir }}/moodle_project"
+
+  pre_tasks:
+    - name: Install GPG
+      ansible.builtin.apt:
+        name: 
+          - gpg
+
+    - name: Remove any existing Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable"
+        state: absent
+
+    - name: Remove Docker entries from /etc/apt/sources.list
+      ansible.builtin.lineinfile:
+        path: /etc/apt/sources.list
+        regexp: '^deb .*download\.docker\.com.*$'
+        state: absent
+
+    - name: Remove old Docker APT source list files
+      ansible.builtin.find:
+        paths: /etc/apt/sources.list.d
+        patterns: 'docker*'
+      register: docker_list_files
+
+    - name: Delete found Docker source list files
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ docker_list_files.files }}"
+
+    - name: Remove old Docker keyring file
+      ansible.builtin.file:
+        path: /etc/apt/keyrings/docker.asc
+        state: absent
+
+    - name: Ensure APT keyrings directory exists
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker GPG key to keyring
+      ansible.builtin.apt_key:
+        url: https://download.docker.com/linux/debian/gpg
+        keyring: /etc/apt/keyrings/docker.gpg
+        state: present
+
+    - name: Configure Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable"
+        filename: docker.list
+        state: present
+
+  tasks:
+    - name: Load setup vars
+      ansible.builtin.include_vars:
+        file: setup.yml
+
+    - name: Build www_root
+      set_fact:
+        www_root: "{{ www_protocol }}://{{ www_host }}:{{ www_port }}"
+
+    - name: Install required APT packages for Docker
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+        update_cache: yes
+
+    - name: Install Docker Engine and Compose plugin
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: latest
+        update_cache: yes
+
+    - name: Ensure Docker service is running
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Ensure remote project directory exists
+      ansible.builtin.file:
+        path: "{{ path_to_copy_to }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: syncronize moodle_project
+      ansible.builtin.copy:
+        src: "./moodle_project/"
+        dest: "{{ path_to_copy_to }}"
+        directory_mode: yes
+        force: yes
+
+    - name: Launch Docker Compose stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ project_dir }}"
+        project_name: moodle_project
+        build: always
+        state: present
+        wait: false
+
+    - name: Wait for Moodle container to be up
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ www_port }}"
+        delay: 5
+        timeout: 120
+        state: started
+
+    - name: Get Moodle container info
+      community.docker.docker_container_info:
+        name: "{{ moodle_container_name }}"
+      register: moodle_container_info
+
+    - name: Install mysqladmin (default-mysql-client) in Moodle container
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "apt-get update && apt-get install -y default-mysql-client"
+
+    - name: Wait up to 90s for MySQL to be ready using mysqladmin ping
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "for i in {1..90}; do mysqladmin ping -h{{ db_host }} -u{{ db_user }} -p{{ db_pass }} > /dev/null 2>&1 && exit 0; sleep 1; done; echo 'MySQL did not become ready in time.' >&2; exit 1"
+
+    - name: Check if Moodle is already installed (config.php exists)
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: test -f /var/www/html/moodle/config.php
+      register: moodle_config_check
+      failed_when: false
+
+    - name: Check if Moodle is already installed (DB check)
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          php /var/www/html/moodle/admin/cli/cfg.php --component=core --name=wwwroot
+      register: moodle_already_installed
+      failed_when: false
+
+    - name: Run Moodle CLI installer
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          php /var/www/html/moodle/admin/cli/install.php
+          --wwwroot="{{ www_root }}/{{ moodle_path }}"
+          --dataroot={{ moodle_dataroot }}
+          --dbtype={{ db_type }}
+          --dbname={{ db_name }}
+          --dbuser={{ db_user }}
+          --dbpass={{ db_pass }}
+          --dbhost={{ db_host }}
+          --fullname="{{ moodle_fullname }}"
+          --shortname="{{ moodle_shortname }}"
+          --adminuser={{ moodle_admin_user }}
+          --adminpass={{ moodle_admin_pass }}
+          --adminemail={{ moodle_admin_email }}
+          --lang={{ moodle_lang }}
+          --non-interactive
+          --agree-license
+      when: 
+        - moodle_config_check.rc != 0
+        - moodle_already_installed.rc != 0
+
+    - name: Fix Moodle file permissions
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "
+            chown -R root:root /var/www/html/moodle &&
+            find /var/www/html/moodle -type f -exec chmod 644 {} \; &&
+            find /var/www/html/moodle -type d -exec chmod 755 {} \;
+          "
+
+    - name: Install Moosh inside the container
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "if [ ! -d /opt/moosh ]; then
+                    git clone https://github.com/tmuras/moosh.git /opt/moosh &&
+                    cd /opt/moosh &&
+                    composer install --no-dev &&
+                    ln -s /opt/moosh/moosh.php /usr/local/bin/moosh;
+                  fi"
+
+    - name: Increase memory limit to install CodeRunner
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "cat /usr/local/etc/php/php.ini-production \
+                    | sed 's/memory_limit.*$/memory_limit = 256M/g' \
+                    > /usr/local/etc/php/php.ini"
+
+    - name: Check if CodeRunner plugin is already present
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: test -d /var/www/html/moodle/question/type/coderunner
+      register: coderunner_present
+      ignore_errors: true
+
+    - name: Clone CodeRunner plugin from GitHub into Moodle
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "git clone https://github.com/trampgeek/moodle-qtype_coderunner.git /var/www/html/moodle/question/type/coderunner"
+      when: coderunner_present.rc != 0
+
+    - name: Download adaptive_adapted_for_coderunner plugin ZIP
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          curl -L -o /tmp/adaptive.zip https://moodle.org/plugins/download.php/34660/qbehaviour_adaptive_adapted_for_coderunner_moodle45_2025012500.zip
+      when: coderunner_present.rc != 0
+
+    - name: Unzip adaptive_adapted_for_coderunner into behaviour folder
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          unzip /tmp/adaptive.zip -d /var/www/html/moodle/question/behaviour/
+      when: coderunner_present.rc != 0
+
+    - name: Run Moodle CLI upgrade to install the plugin
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          php /var/www/html/moodle/admin/cli/upgrade.php --non-interactive
+      when: coderunner_present.rc != 0
+
+    - name: Set CodeRunner plugin configuration with Moosh
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          moosh -p /var/www/html/moodle config-set {{ item.name }} {{ item.value }} qtype_coderunner
+      loop:
+        - { name: "enablegradecache",   value: "0" }
+        - { name: "ideonesandbox_enabled", value: "0" }
+        - { name: "ideone_password",    value: ""  }
+        - { name: "ideone_user",        value: ""  }
+        - { name: "jobesandbox_enabled", value: "1" }
+        - { name: "jobe_apikey",        value: "2AAA7A5415B4A9B394B54BF1D2E9D" }
+        - { name: "jobe_host",          value: "http://jobe" }
+        - { name: "wsenabled",          value: "0" }
+        - { name: "wsjobeserver",       value: "" }
+        - { name: "wsloggingenabled",   value: "1" }
+        - { name: "wsmaxcputime",       value: "5" }
+        - { name: "wsmaxhourlyrate",    value: "200" }
+      when: coderunner_present.rc != 0
+
+    - name: Desbloquear rango 172.16.0.0/12 en configuración cURL de Moodle
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          moosh -p /var/www/html/moodle config-set curlsecurityblockedhosts
+            "127.0.0.0/8
+             192.168.0.0/16
+             10.0.0.0/8
+             0.0.0.0
+             localhost
+             169.254.169.254
+             0000::1"
+      when: moodle_config_check.rc != 0
+
+    - name: Install qbehaviour_adaptive_adapted_for_coderunner using Moosh
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "
+            moosh -p /var/www/html/moodle plugin-download qbehaviour_adaptive_adapted_for_coderunner &&
+            moosh -p /var/www/html/moodle plugin-install qbehaviour_adaptive_adapted_for_coderunner
+          "
+      when: coderunner_present.rc != 0
+
+    - name: Create user student
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "
+            moosh -p /var/www/html/moodle user-create --password {{ student_pass }} {{ student_user }}
+          "
+      register: student_result
+      when: coderunner_present.rc != 0
+
+    - name: Create user teacher
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "
+            moosh -p /var/www/html/moodle user-create --password {{ teacher_pass }} {{ teacher_user }}
+          "
+      register: profesor_result
+      when: coderunner_present.rc != 0
+
+    - name: Crear categoría de cursos CodeRunnerCategory
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          moosh -p /var/www/html/moodle category-create -v 1 -d '{{ category_description }}' {{ category_name }}
+      register: category_result
+      when: coderunner_present.rc != 0
+
+    - name: Extraer ID de la categoría de cursos
+      set_fact:
+        coderunner_category_id: "{{ category_result.stdout | regex_search('\\d+') | int }}"
+      when: coderunner_present.rc != 0
+
+    - name: Obtener contextid de la categoría de cursos
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          moosh -p /var/www/html/moodle sql-run "SELECT id FROM mdl_context WHERE contextlevel = 40 AND instanceid = {{ coderunner_category_id }};"
+      register: coderunner_context_result
+      when: coderunner_present.rc != 0
+
+    - name: Create course
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "moosh -p /var/www/html/moodle course-create --category {{ coderunner_category_id }} --fullname '{{ course_fullname }}' --description '{{ course_description }}' {{ course_shortname }}"
+          
+      register: curso_result
+      when: coderunner_present.rc != 0
+
+    - name: Extraer ID del curso
+      set_fact:
+        curso_id: "{{ curso_result.stdout | regex_search('\\d+') | int }}"
+      when: coderunner_present.rc != 0
+
+    - name: Esperar a que se complete la creación de secciones
+      ansible.builtin.pause:
+        seconds: 5
+      when: coderunner_present.rc != 0
+
+    - name: Enable self enrol
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: moosh -p /var/www/html/moodle course-enableselfenrol {{ curso_id }}
+      when: coderunner_present.rc != 0
+
+    - name: Matriculate teacher and student to the course
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "
+            moosh -p /var/www/html/moodle course-enrol -r editingteacher -i {{ curso_id }} {{ profesor_result.stdout }} &&
+            moosh -p /var/www/html/moodle course-enrol {{ curso_id }} {{ student_user }}
+          "
+      when: coderunner_present.rc != 0
+
+    - name: Rename sections of the course
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "moosh -p /var/www/html/moodle section-config-set -s 1 course {{ curso_id }} name '{{ section_1_name }}' &&
+                   moosh -p /var/www/html/moodle section-config-set -s 2 course {{ curso_id }} name '{{ section_2_name }}' "
+      when: coderunner_present.rc != 0
+
+    - name: Add quiz Estructuras Enlazadas
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "moosh -p /var/www/html/moodle activity-add -n '{{ quiz_1_name }}' -o='--intro={{ quiz_1_introduction }} --completionpass=1' --section 1 quiz {{ curso_id }}"
+      when: coderunner_present.rc != 0
+
+    - name: Add quiz TADs
+      community.docker.docker_container_exec:
+        container: "{{ moodle_container_info.container.Id }}"
+        command: >
+          bash -c "moosh -p /var/www/html/moodle activity-add -n '{{ quiz_2_name }}' -o='--intro={{ quiz_2_introduction }} --completionpass=1' --section 2 quiz {{ curso_id }}"
+      when: coderunner_present.rc != 0

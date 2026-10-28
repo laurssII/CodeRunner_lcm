@@ -1,0 +1,5 @@
+#Execute the following command before using ansible-playbook tool
+#ansible-galaxy install -r requirements.yml
+collections:
+  - name: community.docker
+    version: ">=3.0.0"
