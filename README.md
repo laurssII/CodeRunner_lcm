@@ -55,7 +55,7 @@ Tres contenedores Docker en una red privada, orquestados con `docker compose` y 
 
 - Una **máquina anfitriona** (en el desarrollo, Ubuntu) con Python 3 y acceso a Internet.
 - Una **máquina virtual Debian 12** accesible por SSH desde la anfitriona con el puerto **2222**
-  reenviado (`127.0.0.1:2222`). El usuario por defecto es `user` (ver `hosts`).
+  reenviado. El usuario por defecto es `user` (ver `hosts`).
   No es imprescindible usar estos sistemas operativos, pero sí que la VM sea accesible así
   (o modificar `hosts` a tu entorno).
 
