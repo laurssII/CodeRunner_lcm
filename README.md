@@ -22,19 +22,10 @@ Vídeo de demostración de la realización y autocorrección de un cuestionario:
 
 Tres contenedores Docker en una red privada, orquestados con `docker compose` y desplegados por Ansible:
 
-```
- navegador ──► :8080 ┌──────────────────────────┐
-                     │ moodle  (Moodle 4.5 +    │
-                     │          CodeRunner)     │
-                     └───────┬──────────┬───────┘
-                             │          │
-                      ┌──────▼───┐  ┌───▼────────────────┐
-                      │ db       │  │ jobe               │
-                      │ MySQL 8  │  │ sandbox de ejecución│
-                      └──────────┘  └────────────────────┘
-                        (red interna `moodle_net`)
-```
+### Diagrama de arquitectura
 
+![Diagrama de arquitectura](<images/diagramaArquitectura2.png>)
+```
 - Sólo Moodle es accesible desde fuera (puerto `8080`).
 - La base de datos únicamente es accesible desde Moodle.
 - Jobe (donde se ejecuta el código del alumnado) únicamente acepta peticiones de Moodle.
